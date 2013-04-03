@@ -2,12 +2,15 @@
 from django.conf import settings
 from django.db.models import Manager, ForeignKey
 from django.db.models.base import ModelBase
+from django.utils import translation
+from django.db.models.signals import pre_save, post_save
 
 from modeltranslation import settings as mt_settings
 from modeltranslation.fields import (TranslationFieldDescriptor, TranslatedRelationIdDescriptor,
                                      create_translation_field)
 from modeltranslation.manager import MultilingualManager, rewrite_lookup_key
 from modeltranslation.utils import build_localized_fieldname
+from modeltranslation.settings import DEFAULT_LANGUAGE
 
 
 class AlreadyRegistered(Exception):
@@ -94,6 +97,12 @@ class TranslationOptions(object):
         inherited = tuple(set(self.fields.keys()) - set(local))
         return '%s: %s + %s' % (self.__class__.__name__, local, inherited)
 
+def pre_save_fix_handler(sender, instance, **kwargs):
+    setattr(instance, '_current_lang', translation.get_language())
+    translation.activate(DEFAULT_LANGUAGE)
+
+def post_save_fix_handler(sender, instance, **kwargs):
+    translation.activate(instance._current_lang)
 
 def add_translation_fields(model, opts):
     """
@@ -118,6 +127,9 @@ def add_translation_fields(model, opts):
             # django model fields and therefore adds them via add_to_class
             model.add_to_class(localized_field_name, translation_field)
             opts.add_translation_field(field_name, translation_field)
+
+    pre_save.connect(pre_save_fix_handler, sender=model)
+    post_save.connect(post_save_fix_handler, sender=model)
 
 
 def add_manager(model):
