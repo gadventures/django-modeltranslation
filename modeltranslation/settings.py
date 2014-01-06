@@ -12,6 +12,12 @@ if DEFAULT_LANGUAGE and DEFAULT_LANGUAGE not in AVAILABLE_LANGUAGES:
 elif not DEFAULT_LANGUAGE:
     DEFAULT_LANGUAGE = AVAILABLE_LANGUAGES[0]
 
+# Fixed base language for prepopulated fields (slugs)
+# (If not set, the current request language will be used)
+PREPOPULATE_LANGUAGE = getattr(settings, 'MODELTRANSLATION_PREPOPULATE_LANGUAGE', None)
+if PREPOPULATE_LANGUAGE and PREPOPULATE_LANGUAGE not in AVAILABLE_LANGUAGES:
+    raise ImproperlyConfigured('MODELTRANSLATION_PREPOPULATE_LANGUAGE not in LANGUAGES setting.')
+
 # Load allowed CUSTOM_FIELDS from django settings
 CUSTOM_FIELDS = getattr(settings, 'MODELTRANSLATION_CUSTOM_FIELDS', ())
 
@@ -33,7 +39,7 @@ if isinstance(FALLBACK_LANGUAGES, (tuple, list)):
 if 'default' not in FALLBACK_LANGUAGES:
     raise ImproperlyConfigured(
         'MODELTRANSLATION_FALLBACK_LANGUAGES does not contain "default" key.')
-for key, value in FALLBACK_LANGUAGES.iteritems():
+for key, value in FALLBACK_LANGUAGES.items():
     if key != 'default' and key not in AVAILABLE_LANGUAGES:
         raise ImproperlyConfigured(
             'MODELTRANSLATION_FALLBACK_LANGUAGES: "%s" not in LANGUAGES setting.' % key)
@@ -45,3 +51,5 @@ for key, value in FALLBACK_LANGUAGES.iteritems():
             raise ImproperlyConfigured(
                 'MODELTRANSLATION_FALLBACK_LANGUAGES: "%s" not in LANGUAGES setting.' % lang)
 ENABLE_FALLBACKS = getattr(settings, 'MODELTRANSLATION_ENABLE_FALLBACKS', True)
+
+LOADDATA_RETAIN_LOCALE = getattr(settings, 'MODELTRANSLATION_LOADDATA_RETAIN_LOCALE', True)

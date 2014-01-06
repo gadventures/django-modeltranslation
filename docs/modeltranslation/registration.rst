@@ -55,6 +55,8 @@ translation will have been added some auto-magical fields. The next section
 explains how things are working under the hood.
 
 
+.. _TO_field_inheritance:
+
 ``TranslationOptions`` fields inheritance
 -----------------------------------------
 
@@ -126,18 +128,82 @@ As these fields are added to the registered model class as fully valid Django
 model fields, they will appear in the db schema for the model although it has
 not been specified on the model explicitly.
 
+.. _db-fields:
+
+Committing fields to database
+*****************************
+
 If you are starting a fresh project and have considered your translation needs
-in the beginning then simply sync your database and you are ready to use
-the translated models.
+in the beginning then simply sync your database (``./manage.py syncdb`` or
+``./manage.py schemamigration myapp --initial`` if using South)
+and you are ready to use the translated models.
 
 In case you are translating an existing project and your models have already
 been synced to the database you will need to alter the tables in your database
-and add these additional translation fields. Note that all added fields are
+and add these additional translation fields. If you are using South, you're
+done: simply create a new migration (South will detect newly added translation
+fields) and apply it. If not, you can use a little helper:
+:ref:`commands-sync_translation_fields` which can execute schema-ALTERing SQL
+to add new fields. Use either of these two solutions, not both.
+
+If you are adding translation fields to third-party app that is using South,
+things get more complicated. In order to be able to update the app in future,
+and to feel comfortable, you should use the ``sync_translation_fields`` command.
+Although it's possible to introduce new fields in a migration, it's nasty and
+involves copying migration files, using ``SOUTH_MIGRATION_MODULES`` setting,
+and passing ``--delete-ghost-migrations`` flag, so we don't recommend it.
+Invoking ``sync_translation_fields`` is plain easier.
+
+Note that all added fields are
 declared ``blank=True`` and ``null=True`` no matter if the original field is
 required or not. In other words - all translations are optional. To populate
-the default translation fields added by the modeltranslation application you
+the default translation fields added by the modeltranslation application
+with values from existing database fields, you
 can use the ``update_translation_fields`` command below. See
-:ref:`commands-update_translation_fields` for more infos on this.
+:ref:`commands-update_translation_fields` for more info on this.
+
+
+``TranslationOptions`` attributes reference
+-------------------------------------------
+
+Quick cheatsheet with links to proper docs sections and examples showing expected syntax.
+
+Classes inheriting from ``TranslationOptions`` can have following attributes defined:
+
+.. attribute:: TranslationOptions.fields (required)
+
+    List of translatable model fields. See :ref:`registration`.
+
+    Some fields can be implicitly added through inheritance, see :ref:`TO_field_inheritance`.
+
+.. attribute:: TranslationOptions.fallback_languages
+
+    Control order of languages for fallback purposes. See :ref:`fallback_lang`. ::
+
+        fallback_languages = {'default': ('en', 'de', 'fr'), 'uk': ('ru',)}
+
+.. attribute:: TranslationOptions.fallback_values
+
+    Set the value that should be used if no fallback language yielded a value.
+    See :ref:`fallback_val`. ::
+
+        fallback_values = _('-- sorry, no translation provided --')
+        fallback_values = {'title': _('Object not translated'), 'text': '---'}
+
+.. attribute:: TranslationOptions.fallback_undefined
+
+    Set what value should be considered "no value". See :ref:`fallback_undef`. ::
+
+        fallback_undefined = None
+        fallback_undefined = {'title': 'no title', 'text': None}
+
+.. attribute:: TranslationOptions.empty_values
+
+    Override the value that should be saved in forms on empty fields.
+    See :ref:`formfield_nullability`. ::
+
+        empty_values = ''
+        empty_values = {'title': '', 'slug': None, 'desc': 'both'}
 
 
 .. _supported_field_matrix:
@@ -178,7 +244,7 @@ Model Field                     0.4 0.5 0.7
 ``TimeField``                   |n| |y| |y|
 ``URLField``                    |i| |i| |i|
 ``ForeignKey``                  |n| |n| |y|
-``OneToOneField``               |n| |n| |n|
+``OneToOneField``               |n| |n| |y|
 ``ManyToManyField``             |n| |n| |n|
 =============================== === === ===
 

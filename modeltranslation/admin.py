@@ -4,19 +4,22 @@ from copy import deepcopy
 from django.contrib import admin
 from django.contrib.admin.options import BaseModelAdmin, flatten_fieldsets, InlineModelAdmin
 from django.contrib.contenttypes import generic
+from django import forms
 
 # Ensure that models are registered for translation before TranslationAdmin
 # runs. The import is supposed to resolve a race condition between model import
 # and translation registration in production (see issue #19).
 import modeltranslation.models  # NOQA
-from modeltranslation.settings import DEFAULT_LANGUAGE
+from modeltranslation import settings as mt_settings
 from modeltranslation.translator import translator
 from modeltranslation.utils import (
-    get_translation_fields, build_css_class, build_localized_fieldname, get_language)
+    get_translation_fields, build_css_class, build_localized_fieldname, get_language, unique)
+from modeltranslation.widgets import ClearableWidgetWrapper
 
 
 class TranslationBaseModelAdmin(BaseModelAdmin):
     _orig_was_required = {}
+    both_empty_values_fields = ()
 
     def __init__(self, *args, **kwargs):
         super(TranslationBaseModelAdmin, self).__init__(*args, **kwargs)
@@ -55,12 +58,24 @@ class TranslationBaseModelAdmin(BaseModelAdmin):
         else:
             orig_formfield = self.formfield_for_dbfield(orig_field, **kwargs)
             field.widget = deepcopy(orig_formfield.widget)
+            if orig_field.name in self.both_empty_values_fields:
+                from modeltranslation.forms import NullableField, NullCharField
+                form_class = field.__class__
+                if issubclass(form_class, NullCharField):
+                    # NullableField don't work with NullCharField
+                    form_class.__bases__ = tuple(
+                        b for b in form_class.__bases__ if b != NullCharField)
+                field.__class__ = type(
+                    'Nullable%s' % form_class.__name__, (NullableField, form_class), {})
+            if ((db_field.empty_value == 'both' or orig_field.name in self.both_empty_values_fields)
+                    and isinstance(field.widget, (forms.TextInput, forms.Textarea))):
+                field.widget = ClearableWidgetWrapper(field.widget)
             css_classes = field.widget.attrs.get('class', '').split(' ')
             css_classes.append('mt')
             # Add localized fieldname css class
             css_classes.append(build_css_class(db_field.name, 'mt-field'))
 
-            if db_field.language == DEFAULT_LANGUAGE:
+            if db_field.language == mt_settings.DEFAULT_LANGUAGE:
                 # Add another css class to identify a default modeltranslation
                 # widget.
                 css_classes.append('mt-default')
@@ -72,6 +87,9 @@ class TranslationBaseModelAdmin(BaseModelAdmin):
                     orig_formfield.blank = True
                     field.required = True
                     field.blank = False
+                    # Hide clearable widget for required fields
+                    if isinstance(field.widget, ClearableWidgetWrapper):
+                        field.widget = field.widget.widget
             field.widget.attrs['class'] = ' '.join(css_classes)
 
     def _exclude_original_fields(self, exclude=None):
@@ -90,7 +108,8 @@ class TranslationBaseModelAdmin(BaseModelAdmin):
         Returns a new list with replaced fields. If `option` contains no
         registered fields, it is returned unmodified.
 
-        >>> print self.trans_opts.fields.keys()
+        >>> self = TranslationAdmin()  # PyFlakes
+        >>> print(self.trans_opts.fields.keys())
         ['title',]
         >>> get_translation_fields(self.trans_opts.fields.keys()[0])
         ['title_de', 'title_en']
@@ -129,17 +148,24 @@ class TranslationBaseModelAdmin(BaseModelAdmin):
         return fieldsets
 
     def _patch_prepopulated_fields(self):
-        if self.prepopulated_fields:
-            # TODO: Perhaps allow to configure which language the slug should be based on?
-            lang = get_language()
-            prepopulated_fields_new = dict(self.prepopulated_fields)
-            translation_fields = []
-            for k, v in self.prepopulated_fields.items():
-                for i in v:
-                    if i in self.trans_opts.fields.keys():
-                        translation_fields.append(build_localized_fieldname(i, lang))
-                prepopulated_fields_new[k] = tuple(translation_fields)
-            self.prepopulated_fields = prepopulated_fields_new
+        def localize(sources, lang):
+            "Append lang suffix (if applicable) to field list"
+            def append_lang(source):
+                if source in self.trans_opts.fields:
+                    return build_localized_fieldname(source, lang)
+                return source
+            return tuple(map(append_lang, sources))
+
+        prepopulated_fields = {}
+        for dest, sources in self.prepopulated_fields.items():
+            if dest in self.trans_opts.fields:
+                for lang in mt_settings.AVAILABLE_LANGUAGES:
+                    key = build_localized_fieldname(dest, lang)
+                    prepopulated_fields[key] = localize(sources, lang)
+            else:
+                lang = mt_settings.PREPOPULATE_LANGUAGE or get_language()
+                prepopulated_fields[dest] = localize(sources, lang)
+        self.prepopulated_fields = prepopulated_fields
 
     def _do_get_form_or_formset(self, request, obj, **kwargs):
         """
@@ -189,7 +215,7 @@ class TranslationBaseModelAdmin(BaseModelAdmin):
         if exclude_languages:
             excl_languages = exclude_languages
         exclude = []
-        for orig_fieldname, translation_fields in self.trans_opts.fields.iteritems():
+        for orig_fieldname, translation_fields in self.trans_opts.fields.items():
             for tfield in translation_fields:
                 language = tfield.name.split('_')[-1]
                 if language in excl_languages and tfield not in exclude:
@@ -251,6 +277,7 @@ class TranslationAdmin(TranslationBaseModelAdmin, admin.ModelAdmin):
             # TODO: Allow setting a label
             fieldsets = [('', {'fields': untranslated_fields},)] if untranslated_fields else []
 
+            temp_fieldsets = {}
             for orig_field, trans_fields in self.trans_opts.fields.items():
                 trans_fieldnames = [f.name for f in sorted(trans_fields, key=lambda x: x.name)]
                 if any(f in trans_fieldnames for f in flattened_fieldsets):
@@ -258,10 +285,16 @@ class TranslationAdmin(TranslationBaseModelAdmin, admin.ModelAdmin):
                     # fieldset's label - using ugettext_lazy in your model
                     # declaration can make that translatable.
                     label = self.model._meta.get_field(orig_field).verbose_name
-                    fieldsets.append((label, {
+                    temp_fieldsets[orig_field] = (label, {
                         'fields': trans_fieldnames,
                         'classes': ('mt-fieldset',)
-                    }))
+                    })
+
+            fields_order = unique(f.translated_field.name for f in self.opts.fields if
+                                  hasattr(f, 'translated_field') and f.name in flattened_fieldsets)
+            for field_name in fields_order:
+                fieldsets.append(temp_fieldsets.pop(field_name))
+            assert not temp_fieldsets  # cleaned
 
         return fieldsets
 
@@ -273,7 +306,8 @@ class TranslationAdmin(TranslationBaseModelAdmin, admin.ModelAdmin):
         if self.declared_fieldsets:
             return self._do_get_fieldsets_pre_form_or_formset()
         return self._group_fieldsets(
-            self._do_get_fieldsets_post_form_or_formset(request, self.get_form(request, obj), obj))
+            self._do_get_fieldsets_post_form_or_formset(
+                request, self.get_form(request, obj, fields=None), obj))
 
 
 class TranslationInlineModelAdmin(TranslationBaseModelAdmin, InlineModelAdmin):
@@ -287,7 +321,7 @@ class TranslationInlineModelAdmin(TranslationBaseModelAdmin, InlineModelAdmin):
         # is displayed above the new fieldsets.
         if self.declared_fieldsets:
             return self._do_get_fieldsets_pre_form_or_formset()
-        form = self.get_formset(request, obj).form
+        form = self.get_formset(request, obj, fields=None).form
         return self._do_get_fieldsets_post_form_or_formset(request, form, obj)
 
 
@@ -305,3 +339,28 @@ class TranslationGenericTabularInline(TranslationInlineModelAdmin, generic.Gener
 
 class TranslationGenericStackedInline(TranslationInlineModelAdmin, generic.GenericStackedInline):
     pass
+
+
+class TabbedDjangoJqueryTranslationAdmin(TranslationAdmin):
+    class Media:
+        js = (
+            'modeltranslation/js/force_jquery.js',
+            'http://ajax.googleapis.com/ajax/libs/jqueryui/1.8.2/jquery-ui.min.js',
+            'modeltranslation/js/tabbed_translation_fields.js',
+        )
+        css = {
+            'all': ('modeltranslation/css/tabbed_translation_fields.css',),
+        }
+TabbedTranslationAdmin = TabbedDjangoJqueryTranslationAdmin
+
+
+class TabbedExternalJqueryTranslationAdmin(TranslationAdmin):
+    class Media:
+        js = (
+            'http://ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js',
+            'http://ajax.googleapis.com/ajax/libs/jqueryui/1.10.2/jquery-ui.min.js',
+            'modeltranslation/js/tabbed_translation_fields.js',
+        )
+        css = {
+            'screen': ('modeltranslation/css/tabbed_translation_fields.css',),
+        }

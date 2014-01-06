@@ -7,18 +7,31 @@ from modeltranslation.tests.models import (
     DescriptorModel, AbstractModelA, AbstractModelB, Slugged, MetaData, Displayable, Page,
     RichText, RichTextPage, MultitableModelA, MultitableModelB, MultitableModelC, ManagerTestModel,
     CustomManagerTestModel, CustomManager2TestModel, GroupFieldsetsModel, NameModel,
-    ThirdPartyRegisteredModel)
+    ThirdPartyRegisteredModel, ProxyTestModel, UniqueNullableModel, OneToOneFieldModel)
 
 
 class TestTranslationOptions(TranslationOptions):
     fields = ('title', 'text', 'url', 'email',)
+    empty_values = ''
 translator.register(TestModel, TestTranslationOptions)
+
+
+class UniqueNullableTranslationOptions(TranslationOptions):
+    fields = ('title',)
+translator.register(UniqueNullableModel, UniqueNullableTranslationOptions)
+
+
+########## Proxy model testing
+
+class ProxyTestTranslationOptions(TranslationOptions):
+    fields = ('title', 'text', 'url', 'email',)
+translator.register(ProxyTestModel, ProxyTestTranslationOptions)
 
 
 ########## Fallback values testing
 
 class FallbackModelTranslationOptions(TranslationOptions):
-    fields = ('title', 'text', 'url', 'email',)
+    fields = ('title', 'text', 'url', 'email', 'description')
     fallback_values = "fallback"
 translator.register(FallbackModel, FallbackModelTranslationOptions)
 
@@ -26,21 +39,27 @@ translator.register(FallbackModel, FallbackModelTranslationOptions)
 class FallbackModel2TranslationOptions(TranslationOptions):
     fields = ('title', 'text', 'url', 'email',)
     fallback_values = {'text': ugettext_lazy('Sorry, translation is not available.')}
+    fallback_undefined = {'title': 'no title'}
 translator.register(FallbackModel2, FallbackModel2TranslationOptions)
 
 
 ########## File fields testing
 
 class FileFieldsModelTranslationOptions(TranslationOptions):
-    fields = ('title', 'file', 'image',)
+    fields = ('title', 'file', 'file2', 'image',)
 translator.register(FileFieldsModel, FileFieldsModelTranslationOptions)
 
 
-########## Foreign Key fields testing
+########## Foreign Key / OneToOneField testing
 
 class ForeignKeyModelTranslationOptions(TranslationOptions):
     fields = ('title', 'test', 'optional', 'hidden', 'non',)
 translator.register(ForeignKeyModel, ForeignKeyModelTranslationOptions)
+
+
+class OneToOneFieldModelTranslationOptions(TranslationOptions):
+    fields = ('title', 'test', 'optional', 'non',)
+translator.register(OneToOneFieldModel, OneToOneFieldModelTranslationOptions)
 
 
 ########## Custom fields testing
@@ -165,5 +184,5 @@ translator.register(GroupFieldsetsModel, GroupFieldsetsTranslationOptions)
 
 
 class NameTranslationOptions(TranslationOptions):
-    fields = ('firstname', 'lastname',)
+    fields = ('firstname', 'lastname', 'slug2')
 translator.register(NameModel, NameTranslationOptions)

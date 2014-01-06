@@ -5,7 +5,6 @@ django-linguo by Zach Mathew
 
 https://github.com/zmathew/django-linguo
 """
-from __future__ import with_statement  # Python 2.5 compatibility
 from django.db import models
 from django.db.models.fields.related import RelatedField, RelatedObject
 from django.db.models.sql.where import Constraint
@@ -91,10 +90,15 @@ class MultilingualQuerySet(models.query.QuerySet):
                 self.query.add_ordering(*ordering)
 
     # This method was not present in django-linguo
-    def _clone(self, *args, **kwargs):
+    def _clone(self, klass=None, *args, **kwargs):
+        if klass is not None and not issubclass(klass, MultilingualQuerySet):
+            class NewClass(klass, MultilingualQuerySet):
+                pass
+            NewClass.__name__ = 'Multilingual%s' % klass.__name__
+            klass = NewClass
         kwargs.setdefault('_rewrite', self._rewrite)
         kwargs.setdefault('_populate', self._populate)
-        return super(MultilingualQuerySet, self)._clone(*args, **kwargs)
+        return super(MultilingualQuerySet, self)._clone(klass, *args, **kwargs)
 
     # This method was not present in django-linguo
     def rewrite(self, mode=True):
@@ -127,7 +131,8 @@ class MultilingualQuerySet(models.query.QuerySet):
                 c.field = self.model._meta.get_field(new_name)
                 c.col = c.field.column
         if isinstance(q, Node):
-            map(self._rewrite_where, q.children)
+            for child in q.children:
+                self._rewrite_where(child)
 
     def _rewrite_order(self):
         self.query.order_by = [rewrite_order_lookup_key(self.model, field_name)
@@ -139,7 +144,7 @@ class MultilingualQuerySet(models.query.QuerySet):
         if isinstance(q, tuple) and len(q) == 2:
             return rewrite_lookup_key(self.model, q[0]), q[1]
         if isinstance(q, Node):
-            q.children = map(self._rewrite_q, q.children)
+            q.children = list(map(self._rewrite_q, q.children))
         return q
 
     # This method was not present in django-linguo
@@ -151,7 +156,7 @@ class MultilingualQuerySet(models.query.QuerySet):
             q.name = rewrite_lookup_key(self.model, q.name)
             return q
         if isinstance(q, Node):
-            q.children = map(self._rewrite_f, q.children)
+            q.children = list(map(self._rewrite_f, q.children))
         return q
 
     def _filter_or_exclude(self, negate, *args, **kwargs):
@@ -215,7 +220,7 @@ class MultilingualQuerySet(models.query.QuerySet):
         fields = set(fields)
         from modeltranslation.translator import translator
         opts = translator.get_options_for_model(self.model)
-        for key, translated in opts.fields.iteritems():
+        for key, translated in opts.fields.items():
             if key in fields:
                 fields = fields.union(f.name for f in translated)
         return fields
@@ -230,6 +235,37 @@ class MultilingualQuerySet(models.query.QuerySet):
         fields = self._append_translated(fields)
         return super(MultilingualQuerySet, self).only(*fields)
 
+    # This method was not present in django-linguo
+    def raw_values(self, *fields):
+        return super(MultilingualQuerySet, self).values(*fields)
+
+    # This method was not present in django-linguo
+    def values(self, *fields):
+        if not self._rewrite:
+            return super(MultilingualQuerySet, self).values(*fields)
+        new_args = []
+        for key in fields:
+            new_args.append(rewrite_lookup_key(self.model, key))
+        vqs = super(MultilingualQuerySet, self).values(*new_args)
+        vqs.field_names = list(fields)
+        return vqs
+
+    # This method was not present in django-linguo
+    def values_list(self, *fields, **kwargs):
+        if not self._rewrite:
+            return super(MultilingualQuerySet, self).values_list(*fields, **kwargs)
+        new_args = []
+        for key in fields:
+            new_args.append(rewrite_lookup_key(self.model, key))
+        return super(MultilingualQuerySet, self).values_list(*new_args, **kwargs)
+
+    # This method was not present in django-linguo
+    def dates(self, field_name, *args, **kwargs):
+        if not self._rewrite:
+            return super(MultilingualQuerySet, self).dates(field_name, *args, **kwargs)
+        new_key = rewrite_lookup_key(self.model, field_name)
+        return super(MultilingualQuerySet, self).dates(new_key, *args, **kwargs)
+
 
 class MultilingualManager(models.Manager):
     use_for_related_fields = True
@@ -239,6 +275,9 @@ class MultilingualManager(models.Manager):
 
     def populate(self, *args, **kwargs):
         return self.get_query_set().populate(*args, **kwargs)
+
+    def raw_values(self, *args, **kwargs):
+        return self.get_query_set().raw_values(*args, **kwargs)
 
     def get_query_set(self):
         qs = super(MultilingualManager, self).get_query_set()

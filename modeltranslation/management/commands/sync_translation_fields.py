@@ -9,26 +9,31 @@ You will need to execute this command in two cases:
 
 Credits: Heavily inspired by django-transmeta's sync_transmeta_db command.
 """
+from optparse import make_option
 from django.conf import settings
 from django.core.management.base import NoArgsCommand
 from django.core.management.color import no_style
 from django.db import connection, transaction
+from django.utils.six import moves
 
 from modeltranslation.translator import translator
 from modeltranslation.utils import build_localized_fieldname
 
 
-def ask_for_confirmation(sql_sentences, model_full_name):
-    print '\nSQL to synchronize "%s" schema:' % model_full_name
+def ask_for_confirmation(sql_sentences, model_full_name, interactive):
+    print('\nSQL to synchronize "%s" schema:' % model_full_name)
     for sentence in sql_sentences:
-        print '   %s' % sentence
+        print('   %s' % sentence)
     while True:
         prompt = '\nAre you sure that you want to execute the previous SQL: (y/n) [n]: '
-        answer = raw_input(prompt).strip()
+        if interactive:
+            answer = moves.input(prompt).strip()
+        else:
+            answer = 'y'
         if answer == '':
             return False
         elif answer not in ('y', 'n', 'yes', 'no'):
-            print 'Please answer yes or no'
+            print('Please answer yes or no')
         elif answer == 'y' or answer == 'yes':
             return True
         else:
@@ -36,8 +41,8 @@ def ask_for_confirmation(sql_sentences, model_full_name):
 
 
 def print_missing_langs(missing_langs, field_name, model_name):
-    print 'Missing languages in "%s" field from "%s" model: %s' % (
-        field_name, model_name, ", ".join(missing_langs))
+    print('Missing languages in "%s" field from "%s" model: %s' % (
+        field_name, model_name, ", ".join(missing_langs)))
 
 
 class Command(NoArgsCommand):
@@ -45,12 +50,18 @@ class Command(NoArgsCommand):
             ' sync database structure. Does not remove columns of removed'
             ' languages or undeclared fields.')
 
+    option_list = NoArgsCommand.option_list + (
+        make_option('--noinput', action='store_false', dest='interactive', default=True,
+                    help='Do NOT prompt the user for input of any kind.'),
+    )
+
     def handle_noargs(self, **options):
         """
         Command execution.
         """
         self.cursor = connection.cursor()
         self.introspection = connection.introspection
+        self.interactive = options['interactive']
 
         found_missing_fields = False
         models = translator.get_registered_models(abstract=False)
@@ -58,25 +69,26 @@ class Command(NoArgsCommand):
             db_table = model._meta.db_table
             model_full_name = '%s.%s' % (model._meta.app_label, model._meta.module_name)
             opts = translator.get_options_for_model(model)
-            for field_name in opts.local_fields.iterkeys():
+            for field_name in opts.local_fields.keys():
                 missing_langs = list(self.get_missing_languages(field_name, db_table))
                 if missing_langs:
                     found_missing_fields = True
                     print_missing_langs(missing_langs, field_name, model_full_name)
                     sql_sentences = self.get_sync_sql(field_name, missing_langs, model)
-                    execute_sql = ask_for_confirmation(sql_sentences, model_full_name)
+                    execute_sql = ask_for_confirmation(
+                        sql_sentences, model_full_name, self.interactive)
                     if execute_sql:
-                        print 'Executing SQL...',
+                        print('Executing SQL...')
                         for sentence in sql_sentences:
                             self.cursor.execute(sentence)
-                        print 'Done'
+                        print('Done')
                     else:
-                        print 'SQL not executed'
+                        print('SQL not executed')
 
         transaction.commit_unless_managed()
 
         if not found_missing_fields:
-            print 'No new translatable fields detected'
+            print('No new translatable fields detected')
 
     def get_table_fields(self, db_table):
         """
